@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Path Tracer // path-tracer.slippylabs.com</title>
+<meta name="description" content="Progressive Monte Carlo path tracer running in a Web Worker — diffuse, metal and glass materials, adjustable bounces, and a furnace test that proves the maths conserves energy.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Ccircle%20cx%3D%2232%22%20cy%3D%2234%22%20r%3D%2222%22%20fill%3D%22%231c8a52%22%20stroke%3D%22%2339ff8f%22%20stroke-width%3D%222%22%2F%3E%3Ccircle%20cx%3D%2220%22%20cy%3D%2216%22%20r%3D%228%22%20fill%3D%22%231c8a52%22%20stroke%3D%22%2339ff8f%22%20stroke-width%3D%222%22%2F%3E%3Ccircle%20cx%3D%2244%22%20cy%3D%2216%22%20r%3D%228%22%20fill%3D%22%231c8a52%22%20stroke%3D%22%2339ff8f%22%20stroke-width%3D%222%22%2F%3E%3C%2Fsvg%3E">
+<meta name="theme-color" content="#050b10">
+<link rel="stylesheet" href="style.css?v=5">
+</head>
+<body>
+
+<div class="starfield"></div>
+<div class="scanlines"></div>
+
+<main class="page-wrap">
+  <div class="hud-panel wide">
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+
+    <div class="callsign-row">
+      <div class="toad-avatar-wrap">
+        <svg class="toad-avatar" width="46" height="46" viewBox="0 0 64 64">
+          <circle cx="32" cy="34" r="22" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="20" cy="16" r="8" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="44" cy="16" r="8" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="20" cy="16" r="3.5" fill="#050b10"/>
+          <circle cx="44" cy="16" r="3.5" fill="#050b10"/>
+          <ellipse cx="24" cy="32" rx="4.5" ry="5.5" fill="#050b10"/>
+          <ellipse cx="40" cy="32" rx="4.5" ry="5.5" fill="#050b10"/>
+          <circle cx="24" cy="30" r="1.4" fill="#39ff8f"/>
+          <circle cx="40" cy="30" r="1.4" fill="#39ff8f"/>
+          <path d="M22 42 Q32 48 42 42" stroke="#050b10" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
+        <div class="lock-reticle"></div>
+      </div>
+      <span class="callsign">Workshop Division // Tool</span>
+      <div class="nav-links">
+        <a href="https://projects.slippylabs.com/" class="logout-link">&larr; Archive</a>
+      </div>
+    </div>
+
+    <h1>PATH TRACER</h1>
+    <p class="subtitle">A little rendering engine in a background thread. It fires rays at a scene, bounces them around until they find light, and averages the result — the image sharpens as the samples pile up.</p>
+
+    <div class="tool-controls">
+      <button class="tool-btn" id="start-btn">Render</button>
+      <button class="tool-btn ghost" id="pause-btn">Pause</button>
+      <button class="tool-btn ghost" id="reset-btn">Reset</button>
+      <button class="tool-btn ghost" id="save-btn">Download PNG</button>
+    </div>
+
+    <div class="tool-controls">
+      <label class="tool-field-label" for="scene-select">Scene</label>
+      <select class="tool-select" id="scene-select">
+        <option value="showcase">Showcase — glass, metal, diffuse</option>
+        <option value="lights">Night — emissive spheres</option>
+        <option value="furnace">Furnace test — energy check</option>
+      </select>
+      <label class="tool-field-label" for="width-select">Resolution</label>
+      <select class="tool-select" id="width-select">
+        <option value="240">240 × 160</option>
+        <option value="360" selected>360 × 240</option>
+        <option value="480">480 × 320</option>
+        <option value="720">720 × 480</option>
+      </select>
+    </div>
+
+    <div class="tool-field-row">
+      <label class="tool-field-label" for="bounce-slider">Max bounces &mdash; <span id="bounce-label">8</span></label>
+      <div class="tool-slider-row">
+        <input type="range" id="bounce-slider" min="1" max="24" value="8">
+      </div>
+    </div>
+
+    <canvas class="trace-canvas" id="trace"></canvas>
+
+    <div class="stat-grid">
+      <div class="stat-tile"><span class="stat-value" id="stat-samples">0</span><span class="stat-label">Samples / Pixel</span></div>
+      <div class="stat-tile"><span class="stat-value" id="stat-rays">&mdash;</span><span class="stat-label">Rays / Second</span></div>
+      <div class="stat-tile"><span class="stat-value" id="stat-time">0s</span><span class="stat-label">Elapsed</span></div>
+      <div class="stat-tile"><span class="stat-value" id="stat-noise">&mdash;</span><span class="stat-label">Furnace Error</span></div>
+    </div>
+
+    <p class="tool-output" id="status-line" style="min-height:auto">Press Render to start.</p>
+
+    <p class="tool-note">All the tracing happens on a Web Worker, so the page stays responsive while it grinds. Noise falls off with the square root of the sample count &mdash; four times the samples for half the grain, which is why the last bit of cleanup always takes the longest. The <strong>furnace test</strong> is the honest one: a perfectly white diffuse sphere sitting in a uniformly white environment must become completely invisible, because a surface that reflects all the light it receives cannot be any darker than its surroundings. If the sphere is still visible against the background, the maths is losing or inventing energy, and the error figure above says by how much.</p>
+
+    <div class="comm-window">
+      <div class="comm-portrait">
+        <svg width="36" height="36" viewBox="0 0 64 64">
+          <circle cx="32" cy="34" r="22" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="20" cy="16" r="8" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="44" cy="16" r="8" fill="#1c8a52" stroke="#39ff8f" stroke-width="2"/>
+          <circle cx="20" cy="16" r="3.5" fill="#050b10"/>
+          <circle cx="44" cy="16" r="3.5" fill="#050b10"/>
+          <ellipse cx="24" cy="32" rx="4.5" ry="5.5" fill="#050b10"/>
+          <ellipse cx="40" cy="32" rx="4.5" ry="5.5" fill="#050b10"/>
+          <circle cx="24" cy="30" r="1.4" fill="#39ff8f"/>
+          <circle cx="40" cy="30" r="1.4" fill="#39ff8f"/>
+          <path d="M22 42 Q32 48 42 42" stroke="#050b10" stroke-width="2" fill="none" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="comm-body">
+        <div class="comm-label"><span class="dot"></span> Incoming Transmission &mdash; Slippy</div>
+        <p>"Every pixel is a few thousand guesses that eventually stop disagreeing."</p>
+      </div>
+    </div>
+
+    <a href="https://projects.slippylabs.com/" class="hud-btn">&larr; Back to Archive</a>
+  </div>
+</main>
+
+<script>
+// The worker body is a real function, stringified at start-up. That keeps it
+// syntax-checkable and readable instead of hiding in a template literal.
+function tracerWorker() {
+  let W = 0, H = 0, accum = null, samples = 0, maxBounce = 8, scene = null, camera = null;
+
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const mul = (a, b) => [a[0] * b[0], a[1] * b[1], a[2] * b[2]];
+  const scale = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const len = (a) => Math.sqrt(dot(a, a));
+  const norm = (a) => { const l = len(a); return [a[0] / l, a[1] / l, a[2] / l]; };
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+
+  function randomUnit() {
+    for (;;) {
+      const p = [Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1];
+      const l2 = dot(p, p);
+      if (l2 > 1e-8 && l2 <= 1) return scale(p, 1 / Math.sqrt(l2));
+    }
+  }
+
+  function reflect(v, n) { return sub(v, scale(n, 2 * dot(v, n))); }
+
+  function refract(uv, n, ratio) {
+    const cosTheta = Math.min(-dot(uv, n), 1);
+    const perp = scale(add(uv, scale(n, cosTheta)), ratio);
+    const parallel = scale(n, -Math.sqrt(Math.abs(1 - dot(perp, perp))));
+    return add(perp, parallel);
+  }
+
+  function schlick(cosine, ratio) {
+    let r0 = (1 - ratio) / (1 + ratio);
+    r0 = r0 * r0;
+    return r0 + (1 - r0) * Math.pow(1 - cosine, 5);
+  }
+
+  const SCENES = {
+    showcase: {
+      background: (d) => {
+        const t = 0.5 * (norm(d)[1] + 1);
+        return add(scale([1, 1, 1], 1 - t), scale([0.35, 0.6, 1], t));
+      },
+      camera: { from: [0, 1.1, 4.2], at: [0, 0.45, 0], fov: 42 },
+      spheres: [
+        { c: [0, -100.5, 0], r: 100, m: { type: 'lambert', albedo: [0.32, 0.42, 0.36] } },
+        { c: [0, 0.5, 0], r: 0.5, m: { type: 'glass', ior: 1.5 } },
+        { c: [-1.15, 0.5, -0.2], r: 0.5, m: { type: 'metal', albedo: [0.8, 0.82, 0.85], fuzz: 0.02 } },
+        { c: [1.15, 0.5, -0.2], r: 0.5, m: { type: 'lambert', albedo: [0.22, 1.0, 0.56] } },
+        { c: [0, 0.22, 1.0], r: 0.22, m: { type: 'metal', albedo: [1.0, 0.57, 0.19], fuzz: 0.35 } },
+      ],
+    },
+    lights: {
+      background: () => [0.015, 0.025, 0.03],
+      camera: { from: [0, 1.2, 4.6], at: [0, 0.5, 0], fov: 45 },
+      spheres: [
+        { c: [0, -100.5, 0], r: 100, m: { type: 'lambert', albedo: [0.25, 0.28, 0.3] } },
+        { c: [0, 0.55, 0], r: 0.55, m: { type: 'lambert', albedo: [0.75, 0.75, 0.78] } },
+        { c: [-1.3, 0.75, 0.4], r: 0.35, m: { type: 'light', emit: [7, 2.4, 0.7] } },
+        { c: [1.3, 0.75, 0.4], r: 0.35, m: { type: 'light', emit: [0.9, 6.5, 3.2] } },
+        { c: [0, 2.1, -1.2], r: 0.5, m: { type: 'light', emit: [3, 3, 3.4] } },
+      ],
+    },
+    furnace: {
+      // Uniform radiance 1 everywhere, one perfectly white diffuse sphere.
+      // Correct maths makes the sphere disappear completely.
+      background: () => [1, 1, 1],
+      camera: { from: [0, 0, 4], at: [0, 0, 0], fov: 40 },
+      spheres: [
+        { c: [0, 0, 0], r: 1, m: { type: 'lambert', albedo: [1, 1, 1] } },
+      ],
+    },
+  };
+
+  function hit(origin, dir) {
+    let best = null, bestT = Infinity;
+    for (const s of scene.spheres) {
+      const oc = sub(origin, s.c);
+      const a = dot(dir, dir);
+      const halfB = dot(oc, dir);
+      const c = dot(oc, oc) - s.r * s.r;
+      const disc = halfB * halfB - a * c;
+      if (disc < 0) continue;
+      const sq = Math.sqrt(disc);
+      let t = (-halfB - sq) / a;
+      if (t < 0.001) t = (-halfB + sq) / a;
+      if (t < 0.001 || t >= bestT) continue;
+      bestT = t;
+      const p = add(origin, scale(dir, t));
+      let n = scale(sub(p, s.c), 1 / s.r);
+      const front = dot(dir, n) < 0;
+      if (!front) n = scale(n, -1);
+      best = { p: p, n: n, front: front, m: s.m };
+    }
+    return best;
+  }
+
+  function scatter(m, dir, h) {
+    if (m.type === 'lambert') {
+      let d = add(h.n, randomUnit());
+      if (Math.abs(d[0]) < 1e-8 && Math.abs(d[1]) < 1e-8 && Math.abs(d[2]) < 1e-8) d = h.n;
+      return { dir: d, albedo: m.albedo };
+    }
+    if (m.type === 'metal') {
+      const d = add(reflect(norm(dir), h.n), scale(randomUnit(), m.fuzz));
+      if (dot(d, h.n) <= 0) return null;
+      return { dir: d, albedo: m.albedo };
+    }
+    if (m.type === 'glass') {
+      const ratio = h.front ? 1 / m.ior : m.ior;
+      const unit = norm(dir);
+      const cosTheta = Math.min(-dot(unit, h.n), 1);
+      const sinTheta = Math.sqrt(1 - cosTheta * cosTheta);
+      const mustReflect = ratio * sinTheta > 1 || schlick(cosTheta, ratio) > Math.random();
+      return { dir: mustReflect ? reflect(unit, h.n) : refract(unit, h.n, ratio), albedo: [1, 1, 1] };
+    }
+    return null;
+  }
+
+  function radiance(origin, dir) {
+    let attenuation = [1, 1, 1];
+    let acc = [0, 0, 0];
+    for (let b = 0; b < maxBounce; b++) {
+      const h = hit(origin, dir);
+      if (!h) return add(acc, mul(attenuation, scene.background(dir)));
+      if (h.m.type === 'light') return add(acc, mul(attenuation, h.m.emit));
+      const s = scatter(h.m, dir, h);
+      if (!s) return acc;
+      attenuation = mul(attenuation, s.albedo);
+      origin = h.p;
+      dir = s.dir;
+    }
+    return acc; // bounce budget spent — the ray contributes nothing more
+  }
+
+  function setup(width, height, name, bounces) {
+    W = width; H = height; maxBounce = bounces;
+    scene = SCENES[name] || SCENES.showcase;
+    accum = new Float32Array(W * H * 3);
+    samples = 0;
+
+    const cam = scene.camera;
+    const theta = cam.fov * Math.PI / 180;
+    const viewH = 2 * Math.tan(theta / 2);
+    const viewW = viewH * (W / H);
+    const w = norm(sub(cam.from, cam.at));
+    const u = norm(cross([0, 1, 0], w));
+    const v = cross(w, u);
+    const horizontal = scale(u, viewW);
+    const vertical = scale(v, viewH);
+    camera = {
+      origin: cam.from,
+      horizontal: horizontal,
+      vertical: vertical,
+      lowerLeft: sub(sub(sub(cam.from, scale(horizontal, 0.5)), scale(vertical, 0.5)), w),
+    };
+  }
+
+  function renderPass() {
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const s = (x + Math.random()) / (W - 1);
+        const t = 1 - (y + Math.random()) / (H - 1);
+        const dir = sub(add(add(camera.lowerLeft, scale(camera.horizontal, s)),
+                            scale(camera.vertical, t)), camera.origin);
+        const col = radiance(camera.origin, dir);
+        const i = (y * W + x) * 3;
+        accum[i] += col[0];
+        accum[i + 1] += col[1];
+        accum[i + 2] += col[2];
+      }
+    }
+    samples++;
+  }
+
+  self.onmessage = function (e) {
+    const msg = e.data;
+    if (msg.type === 'init') {
+      setup(msg.width, msg.height, msg.scene, msg.bounces);
+      self.postMessage({ type: 'ready' });
+      return;
+    }
+    if (msg.type === 'pass') {
+      const t0 = Date.now();
+      renderPass();
+      const copy = accum.slice();
+      self.postMessage({
+        type: 'result', buffer: copy.buffer, samples: samples,
+        rays: W * H, ms: Date.now() - t0,
+      }, [copy.buffer]);
+    }
+  };
+}
+
+const canvas = document.getElementById('trace');
+const ctx = canvas.getContext('2d');
+const statusLine = document.getElementById('status-line');
+const sceneSelect = document.getElementById('scene-select');
+const widthSelect = document.getElementById('width-select');
+const bounceSlider = document.getElementById('bounce-slider');
+
+let worker = null;
+let running = false;
+let startedAt = 0;
+let totalRays = 0;
+let imageData = null;
+let lastAccum = null;
+let sampleCount = 0;
+
+function dims() {
+  const w = parseInt(widthSelect.value, 10);
+  return { w: w, h: Math.round(w * 2 / 3) };
+}
+
+function spawnWorker() {
+  if (worker) worker.terminate();
+  const src = '(' + tracerWorker.toString() + ')()';
+  const url = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+  worker = new Worker(url);
+  URL.revokeObjectURL(url);
+  worker.onmessage = onWorkerMessage;
+}
+
+function reset() {
+  const { w, h } = dims();
+  canvas.width = w;
+  canvas.height = h;
+  imageData = ctx.createImageData(w, h);
+  ctx.fillStyle = '#050b10';
+  ctx.fillRect(0, 0, w, h);
+  sampleCount = 0;
+  totalRays = 0;
+  lastAccum = null;
+  document.getElementById('stat-samples').textContent = '0';
+  document.getElementById('stat-rays').textContent = '—';
+  document.getElementById('stat-time').textContent = '0s';
+  document.getElementById('stat-noise').textContent = '—';
+  spawnWorker();
+  worker.postMessage({
+    type: 'init', width: w, height: h,
+    scene: sceneSelect.value, bounces: parseInt(bounceSlider.value, 10),
+  });
+}
+
+function onWorkerMessage(e) {
+  const msg = e.data;
+  if (msg.type === 'ready') {
+    if (running) worker.postMessage({ type: 'pass' });
+    return;
+  }
+  if (msg.type !== 'result') return;
+
+  lastAccum = new Float32Array(msg.buffer);
+  sampleCount = msg.samples;
+  totalRays += msg.rays;
+  paint();
+
+  const elapsed = (Date.now() - startedAt) / 1000;
+  document.getElementById('stat-samples').textContent = sampleCount.toLocaleString();
+  document.getElementById('stat-time').textContent = elapsed.toFixed(1) + 's';
+  document.getElementById('stat-rays').textContent =
+    elapsed > 0 ? Math.round(totalRays / elapsed).toLocaleString() : '—';
+  if (sceneSelect.value === 'furnace') updateFurnaceError();
+
+  if (running) worker.postMessage({ type: 'pass' });
+}
+
+function paint() {
+  const { width: w, height: h } = canvas;
+  const px = imageData.data;
+  for (let i = 0, p = 0; i < w * h; i++, p += 4) {
+    const j = i * 3;
+    // Average, then gamma 2.0 — the sqrt is what stops renders looking muddy.
+    px[p] = Math.min(255, Math.sqrt(lastAccum[j] / sampleCount) * 255);
+    px[p + 1] = Math.min(255, Math.sqrt(lastAccum[j + 1] / sampleCount) * 255);
+    px[p + 2] = Math.min(255, Math.sqrt(lastAccum[j + 2] / sampleCount) * 255);
+    px[p + 3] = 255;
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+// Compare the middle of the sphere with a corner of the background. A correct
+// renderer makes these identical; the gap is the energy error.
+function furnaceError() {
+  if (!lastAccum || !sampleCount) return null;
+  const w = canvas.width, h = canvas.height;
+  const at = (x, y) => {
+    const j = ((y * w) + x) * 3;
+    return (lastAccum[j] + lastAccum[j + 1] + lastAccum[j + 2]) / (3 * sampleCount);
+  };
+  const centre = at(Math.floor(w / 2), Math.floor(h / 2));
+  const corner = (at(2, 2) + at(w - 3, 2) + at(2, h - 3) + at(w - 3, h - 3)) / 4;
+  return { centre: centre, corner: corner, error: Math.abs(centre - corner) / corner };
+}
+
+function updateFurnaceError() {
+  const f = furnaceError();
+  if (!f) return;
+  const pct = f.error * 100;
+  const el = document.getElementById('stat-noise');
+  el.textContent = pct.toFixed(2) + '%';
+  el.style.color = pct < 1 ? 'var(--hud-green)' : pct < 5 ? 'var(--hud-orange)' : 'var(--hud-red)';
+  statusLine.classList.remove('error-text');
+  statusLine.textContent = 'Furnace test — sphere reads ' + f.centre.toFixed(4) +
+    ', background reads ' + f.corner.toFixed(4) + '. They should converge on each other.';
+}
+
+window.__furnace = furnaceError;
+
+document.getElementById('start-btn').addEventListener('click', () => {
+  if (!worker || !lastAccum) reset();
+  running = true;
+  startedAt = Date.now() - 1;
+  totalRays = 0;
+  statusLine.classList.remove('error-text');
+  if (sceneSelect.value !== 'furnace') statusLine.textContent = 'Rendering — the image keeps improving while you watch.';
+  worker.postMessage({ type: 'pass' });
+});
+document.getElementById('pause-btn').addEventListener('click', () => {
+  running = false;
+  statusLine.textContent = 'Paused at ' + sampleCount.toLocaleString() + ' samples per pixel.';
+});
+document.getElementById('reset-btn').addEventListener('click', () => { running = false; reset(); });
+document.getElementById('save-btn').addEventListener('click', () => {
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'render.png';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }, 'image/png');
+});
+
+[sceneSelect, widthSelect].forEach(el => el.addEventListener('change', () => { running = false; reset(); }));
+bounceSlider.addEventListener('input', () => {
+  document.getElementById('bounce-label').textContent = bounceSlider.value;
+});
+bounceSlider.addEventListener('change', () => { running = false; reset(); });
+
+reset();
+// Start immediately — a still-black canvas reads as broken, not idle.
+running = true;
+startedAt = Date.now() - 1;
+statusLine.textContent = 'Rendering — the image keeps improving while you watch.';
+</script>
+</body>
+</html>
