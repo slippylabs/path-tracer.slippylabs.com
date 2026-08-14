@@ -1189,6 +1189,8 @@ mark.regex-match { background: rgba(57, 255, 143, 0.3); color: var(--hud-green);
   .mute-btn { min-height: 44px; }
 
   .tool-btn { padding: 12px 18px; }
+  /* Square icon button — it needs the width as much as the height. */
+  .mute-btn { min-width: 44px; }
 
   .hud-tab {
     min-height: 44px;
