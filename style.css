@@ -30,7 +30,7 @@ body {
 /* ---- moving space backdrop ---- */
 .starfield {
   position: fixed;
-  inset: -12%;
+  inset: -400px;
   z-index: 0;
   pointer-events: none;
   background-image:
@@ -47,11 +47,12 @@ body {
   background-repeat: repeat;
   background-size: 340px 340px;
   opacity: 0.8;
+  will-change: transform;
   animation: starfield-fly 22s linear infinite;
 }
 @keyframes starfield-fly {
-  from { background-position: 0 0; }
-  to   { background-position: -340px 340px; }
+  from { transform: translate(0, 0); }
+  to   { transform: translate(-340px, 340px); }
 }
 
 .starfox-horizon {
@@ -75,7 +76,6 @@ body {
   height: 100%;
   animation: asteroid-tumble var(--spin, 12s) linear infinite;
   animation-delay: var(--delay, 0s);
-  filter: drop-shadow(0 0 4px rgba(57, 255, 143, 0.25));
 }
 .asteroid-spin svg { display: block; width: 100%; height: 100%; }
 .asteroid-spin polygon {
@@ -1230,4 +1230,22 @@ mark.regex-match { background: rgba(57, 255, 143, 0.3); color: var(--hud-green);
      letting the row push the page wider than the viewport. */
   .tool-dim-row { flex-wrap: wrap; }
   .tool-dim-row > div { flex: 1 1 100%; min-width: 0; }
+}
+
+/* ---- perf-lite -------------------------------------------------------------
+   Toggled on <html> by the inline perf-lite snippet (low-power devices) or by
+   the user's "reduce effects" preference. The starfield itself stays: it is a
+   compositor transform now and costs essentially nothing. What this drops are
+   the two effects that force full-viewport work every frame -- mix-blend-mode
+   compositing and backdrop-filter blur. */
+.perf-lite { --bg-panel: rgba(12, 26, 22, 0.95); }
+.perf-lite .scanlines { mix-blend-mode: normal; opacity: 0.4; }
+.perf-lite .starfield,
+.perf-lite .asteroid,
+.perf-lite .asteroid-spin { animation: none; }
+.perf-lite *,
+.perf-lite *::before,
+.perf-lite *::after {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
